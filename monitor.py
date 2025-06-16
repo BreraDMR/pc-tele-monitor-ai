@@ -141,8 +141,33 @@ async def command_start_handler(message: Message) -> None:
         if user["can_use_gemma"]: welcome_text += "🧠 /gemma - Чат с AI"
     else:
         welcome_text += "🔒 Доступ закрыт. Чтобы начать использование, пройдите регистрацию:\n📝 /register"
-        
+
+    welcome_text += "\n\nℹ️ /help — список всех команд"
     await message.reply(welcome_text)
+
+@dp.message(Command("help"))
+async def command_help_handler(message: Message) -> None:
+    is_admin = ADMIN_ID and message.from_user.id == ADMIN_ID
+    user = get_user(message.from_user.id)
+
+    text = "ℹ️ <b>Справка по командам</b>\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
+    text += "▫️ /start — приветствие и статус доступа\n"
+    text += "▫️ /help — эта справка\n"
+
+    if is_admin:
+        text += "📊 /status — системный отчёт (CPU/RAM/диск)\n"
+        text += "🧠 /gemma — чат с ИИ (выход — /bye)\n"
+        text += "👑 /admin — панель управления пользователями\n"
+    elif user and user["status"] == "approved":
+        if user["can_use_status"]:
+            text += "📊 /status — системный отчёт (CPU/RAM/диск)\n"
+        if user["can_use_gemma"]:
+            text += "🧠 /gemma — чат с ИИ (выход — /bye)\n"
+    else:
+        text += "📝 /register — подать заявку на доступ\n"
+
+    text += "\n<i>В режиме ИИ-чата напишите /bye, чтобы выйти.</i>"
+    await message.reply(text)
 
 @dp.message(Command("register"))
 async def start_registration(message: Message, state: FSMContext):
