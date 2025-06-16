@@ -1,5 +1,6 @@
 import os
 import sys
+import html
 import logging
 import asyncio
 from pathlib import Path
@@ -19,8 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Прямі та чисті імпорти локальних модулів без крапок
 from database import (
-    init_db, get_user, register_user, is_login_taken, 
-    get_all_users, update_user_status, add_chat_message, get_chat_history
+    init_db, get_user, register_user, is_login_taken,
+    get_all_users, update_user_status
 )
 from gemma import ask_gemma
 
@@ -153,7 +154,7 @@ async def start_registration(message: Message, state: FSMContext):
     await state.set_state(RegisterStates.waiting_for_login)
     await message.reply("📝 Начнем регистрацию.\nПридумайте и отправьте желаемый <b>Логин</b>:")
 
-@dp.message(RegisterStates.waiting_for_login)
+@dp.message(RegisterStates.waiting_for_login, F.text)
 async def process_login(message: Message, state: FSMContext):
     login = message.text.strip()
     if len(login) < 3:
@@ -166,7 +167,7 @@ async def process_login(message: Message, state: FSMContext):
     await state.set_state(RegisterStates.waiting_for_password)
     await message.reply("🔑 Теперь придумайте и отправьте надежный <b>Пароль</b>:")
 
-@dp.message(RegisterStates.waiting_for_password)
+@dp.message(RegisterStates.waiting_for_password, F.text)
 async def process_password(message: Message, state: FSMContext):
     password = message.text.strip()
     if len(password) < 4:
@@ -208,7 +209,7 @@ async def process_password(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("approve_") | F.data.startswith("reject_"))
 async def handle_approval_buttons(callback: CallbackQuery):
-    if ADMIN_ID and callback.from_user.id != ADMIN_ID:
+    if not ADMIN_ID or callback.from_user.id != ADMIN_ID:
         return await callback.answer("У вас нет прав на это действие.", show_alert=True)
         
     action, target_id = callback.data.split("_")
@@ -342,20 +343,19 @@ async def chat_with_gemma_handler(message: Message):
     if not user_data: return 
 
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    
-    # Зберігаємо повідомлення користувача в базу даних
-    add_chat_message(message.from_user.id, "user", message.text)
-    
+
+    # Історія (user + assistant) зберігається всередині ask_gemma — тут не дублюємо
     response = await ask_gemma(
         telegram_id=message.from_user.id,
         user_message=message.text,
         ollama_url=OLLAMA_URL
     )
-    
-    # Зберігаємо відповідь асистента в базу даних
-    add_chat_message(message.from_user.id, "assistant", response)
-    
-    await message.reply(response)
+
+    # Відповідь моделі може містити символи < > &, які ламають HTML-розмітку Telegram.
+    # Екрануємо й ріжемо на частини, бо ліміт повідомлення Telegram — 4096 символів.
+    safe_response = html.escape(response)
+    for chunk_start in range(0, len(safe_response), 4096):
+        await message.reply(safe_response[chunk_start:chunk_start + 4096])
 
 # --- ЗАПУСК ---
 async def main() -> None:
@@ -364,7 +364,8 @@ async def main() -> None:
     procfs_path = os.getenv("PROCFS_PATH")
     if procfs_path:
         logger.info(f"Using custom PROCFS_PATH: {procfs_path}")
-        os.environ["PROCFS_PATH"] = procfs_path
+        # psutil читає шлях до procfs з атрибута модуля, а не з env-змінної
+        psutil.PROCFS_PATH = procfs_path
 
     logger.info("Starting secure bot polling...")
     try:

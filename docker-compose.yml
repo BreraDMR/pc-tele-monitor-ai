@@ -1,6 +1,3 @@
-
-version: '3.8'
-
 services:
   bot:
     build:
@@ -13,6 +10,5 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./system_monitor_bot.db:/app/system_monitor_bot.db
-      - C:\:/host_c # For Windows host, adjust if on Linux/macOS
     restart: unless-stopped
     command: python monitor.py
