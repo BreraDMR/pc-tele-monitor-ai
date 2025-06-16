@@ -3,11 +3,18 @@ import os
 import hashlib
 import logging
 
-DB_PATH = "system_monitor_bot.db"
+# Шлях до файлу БД. У Docker монтуємо каталог (напр. /app/data) і вказуємо
+# DB_PATH=/app/data/system_monitor_bot.db, щоб bind-mount не створював директорію
+# замість файлу. Для локального запуску лишається файл у поточній теці.
+DB_PATH = os.getenv("DB_PATH", "system_monitor_bot.db")
 
 logger = logging.getLogger("system_monitor.db")
 
 def get_db_connection():
+    # Гарантуємо, що каталог для файлу БД існує
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
