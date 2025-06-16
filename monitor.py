@@ -365,9 +365,17 @@ async def main() -> None:
     
     procfs_path = os.getenv("PROCFS_PATH")
     if procfs_path:
-        logger.info(f"Using custom PROCFS_PATH: {procfs_path}")
-        # psutil читає шлях до procfs з атрибута модуля, а не з env-змінної
-        psutil.PROCFS_PATH = procfs_path
+        # Застосовуємо тільки якщо шлях реально існує — інакше psutil впаде на
+        # читанні /status з помилкою "No such file or directory: .../proc/stat".
+        if os.path.isdir(procfs_path):
+            logger.info(f"Using custom PROCFS_PATH: {procfs_path}")
+            # psutil читає шлях до procfs з атрибута модуля, а не з env-змінної
+            psutil.PROCFS_PATH = procfs_path
+        else:
+            logger.warning(
+                f"PROCFS_PATH='{procfs_path}' does not exist — ignoring, "
+                f"using the container's own /proc instead."
+            )
 
     logger.info("Starting secure bot polling...")
     try:
