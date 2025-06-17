@@ -9,6 +9,8 @@ services:
     environment:
       # БД лежить у змонтованому каталозі /app/data, а не окремим bind-mount файлом
       - DB_PATH=/app/data/system_monitor_bot.db
+      # Кеш моделі Whisper лежить там само, щоб не качати її повторно при кожному перезбірці образу
+      - WHISPER_MODEL_DIR=/app/data/whisper_models
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
