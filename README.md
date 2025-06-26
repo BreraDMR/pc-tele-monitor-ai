@@ -1,8 +1,21 @@
-# PC Tele Monitor AI
+<div align="center">
 
-@asfhjdsgf34hjtr3h4jbot in telegram:)
+# 🖥️ PC Tele Monitor AI
 
-## Description
+**A Telegram bot for keeping an eye on a headless PC — live CPU / RAM / disk metrics, approval-gated access, and an optional local-AI chat, all in one container.**
+
+[![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white&style=for-the-badge)](requirements.txt)
+[![aiogram](https://img.shields.io/badge/aiogram-Telegram-2CA5E0?logo=telegram&logoColor=white&style=for-the-badge)](requirements.txt)
+[![psutil](https://img.shields.io/badge/psutil-system%20metrics-4B8BBE?style=for-the-badge)](monitor.py)
+[![Ollama](https://img.shields.io/badge/Ollama-Gemma%202-000000?logo=ollama&logoColor=white&style=for-the-badge)](gemma.py)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white&style=for-the-badge)](docker-compose.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
+
+</div>
+
+> My first home-lab project — the starting point for [homelab-wsl](https://github.com/BreraDMR/homelab-wsl).
+
+## Overview
 
 PC Tele Monitor AI is a Telegram bot designed to monitor system metrics (CPU, RAM, Disk usage) and provide an interactive chat interface powered by the Gemma 2 9B AI model. The bot allows authorized users to query system status and engage in AI-driven conversations, with an administrative panel for user management and access control. It is built using Python, `aiogram` for the Telegram bot, `psutil` for system monitoring, `SQLite` for user and chat history management, and integrates with the `Ollama` platform for local AI model inference.
 
@@ -28,7 +41,7 @@ To set up and run the PC Tele Monitor AI bot, follow these steps:
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/pc-tele-monitor-ai.git
+git clone https://github.com/BreraDMR/pc-tele-monitor-ai.git
 cd pc-tele-monitor-ai
 ```
 
