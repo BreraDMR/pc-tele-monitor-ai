@@ -30,7 +30,8 @@ from database import (
     init_db, get_user, register_user, is_login_taken,
     get_all_users, update_user_status, clear_chat_history, get_chat_history,
     get_token_usage_per_user, get_total_token_usage,
-    add_audit_log, get_audit_log
+    add_audit_log, get_audit_log,
+    get_model_pref, set_model_pref, get_memory_pref, set_memory_pref, MODEL_TIERS
 )
 from gemma import ask_gemma
 from voice import transcribe_voice
@@ -65,6 +66,40 @@ ADMIN_IDS = {int(x.strip()) for x in _admin_ids_raw.split(",") if x.strip()}
 # Підтримуємо обидва імені змінної — в .env історично трапляється OLLAMA_API_URL,
 # хоча .env.example і код орієнтовані на OLLAMA_URL.
 OLLAMA_URL = os.getenv("OLLAMA_URL") or os.getenv("OLLAMA_API_URL") or "http://192.168.56.1:11434"
+
+# Three AI model tiers a user can pick via /model. resolve_model() maps the
+# stored 'weak'/'strong'/'very_strong' preference to the actual Ollama model.
+CHAT_MODEL = os.getenv("CHAT_MODEL", "qwen2.5:3b")
+CHAT_MODEL_STRONG = os.getenv("CHAT_MODEL_STRONG", "qwen2.5:14b")
+CHAT_MODEL_VERY_STRONG = os.getenv("CHAT_MODEL_VERY_STRONG", "qwen3:30b-a3b")
+
+MODEL_LABELS = {
+    "weak": "Слабая (быстрая)",
+    "strong": "Сильная (умнее)",
+    "very_strong": "Очень сильная (самая умная)",
+}
+MODEL_NAMES = {
+    "weak": CHAT_MODEL,
+    "strong": CHAT_MODEL_STRONG,
+    "very_strong": CHAT_MODEL_VERY_STRONG,
+}
+
+# How long Ollama keeps the chosen model resident after a request, depending on
+# the per-user /model memory toggle: off unloads it soon (frees RAM for the
+# other bots), on pins it for an hour so a back-and-forth chat stays warm.
+KEEP_ALIVE_OFF = "5m"
+KEEP_ALIVE_ON = "1h"
+
+
+def resolve_model(user_id: int) -> str:
+    """Map a user's tier preference to the actual Ollama model name."""
+    return MODEL_NAMES.get(get_model_pref(user_id), CHAT_MODEL)
+
+
+def resolve_keep_alive(user_id: int) -> str:
+    """How long to keep the model resident, based on the user's memory toggle."""
+    return KEEP_ALIVE_ON if get_memory_pref(user_id) else KEEP_ALIVE_OFF
+
 
 if not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
     logger.error("TELEGRAM_BOT_TOKEN is not set. Please update your .env file.")
@@ -134,6 +169,7 @@ def build_command_list(is_admin: bool, can_use_status: int = 0, can_use_gemma: i
         commands += [
             BotCommand(command="status", description="Системный отчёт CPU/RAM/диск"),
             BotCommand(command="gemma", description="Чат с ИИ"),
+            BotCommand(command="model", description="Модель ИИ и память"),
             BotCommand(command="history", description="Последние сообщения с ИИ"),
             BotCommand(command="forget", description="Очистить память диалога с ИИ"),
             BotCommand(command="admin", description="Панель управления пользователями"),
@@ -146,6 +182,7 @@ def build_command_list(is_admin: bool, can_use_status: int = 0, can_use_gemma: i
         commands.append(BotCommand(command="status", description="Системный отчёт CPU/RAM/диск"))
     if can_use_gemma:
         commands.append(BotCommand(command="gemma", description="Чат с ИИ"))
+        commands.append(BotCommand(command="model", description="Модель ИИ и память"))
         commands.append(BotCommand(command="history", description="Последние сообщения с ИИ"))
         commands.append(BotCommand(command="forget", description="Очистить память диалога с ИИ"))
     if not can_use_status and not can_use_gemma:
@@ -214,6 +251,7 @@ async def command_help_handler(message: Message) -> None:
     if user_is_admin:
         text += "📊 /status — системный отчёт (CPU/RAM/диск)\n"
         text += "🧠 /gemma — чат с ИИ (выход — /bye)\n"
+        text += "🤖 /model — модель ИИ (слабая/сильная/очень сильная) + память\n"
         text += "🗂️ /history — последние сообщения с ИИ\n"
         text += "🧹 /forget — очистить память диалога с ИИ\n"
         text += "👑 /admin — панель управления пользователями\n"
@@ -224,6 +262,7 @@ async def command_help_handler(message: Message) -> None:
             text += "📊 /status — системный отчёт (CPU/RAM/диск)\n"
         if user["can_use_gemma"]:
             text += "🧠 /gemma — чат с ИИ (выход — /bye)\n"
+            text += "🤖 /model — модель ИИ (слабая/сильная/очень сильная) + память\n"
             text += "🗂️ /history — последние сообщения с ИИ\n"
             text += "🧹 /forget — очистить память диалога с ИИ\n"
     else:
@@ -424,6 +463,98 @@ async def process_user_ban_unban(callback: CallbackQuery):
             
     await callback.message.edit_text(report, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_list))
 
+# --- /model (выбор модели ИИ + переключатель памяти, на пользователя) ---
+
+def _can_use_gemma(user_id: int) -> bool:
+    if is_admin(user_id):
+        return True
+    user = get_user(user_id)
+    return bool(user and user["status"] == "approved" and user["can_use_gemma"])
+
+
+def model_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    current = get_model_pref(user_id)
+    memory_on = get_memory_pref(user_id)
+
+    rows = []
+    for key in MODEL_TIERS:
+        mark = "✅ " if key == current else "▫️ "
+        rows.append([InlineKeyboardButton(
+            text=f"{mark}{MODEL_LABELS[key]} · {MODEL_NAMES[key]}",
+            callback_data=f"model_set_{key}",
+        )])
+
+    mem_label = "🧠 Память: 🟢 включена" if memory_on else "🧠 Память: 🔴 выключена"
+    rows.append([InlineKeyboardButton(text=mem_label, callback_data="model_memory_toggle")])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def model_settings_text(user_id: int) -> str:
+    pref = get_model_pref(user_id)
+    memory_on = get_memory_pref(user_id)
+    mem_line = (
+        "🟢 <b>включена</b> — модель держится в памяти час после ответа."
+        if memory_on else
+        "🔴 <b>выключена</b> — модель выгружается через несколько минут, освобождая память."
+    )
+    return (
+        "🤖 <b>Модель ИИ для чата</b>\n\n"
+        f"Сейчас выбрано: <b>{html.escape(MODEL_LABELS[pref])}</b> "
+        f"(<code>{html.escape(MODEL_NAMES[pref])}</code>)\n\n"
+        "▫️ <b>Слабая</b> — быстрее, но проще.\n"
+        "▫️ <b>Сильная</b> — умнее, медленнее.\n"
+        "▫️ <b>Очень сильная</b> — самая умная, но самая медленная.\n"
+        "Скорость не критична — выбирай ту, что даёт лучший ответ.\n\n"
+        f"🧠 <b>Память:</b> {mem_line}"
+    )
+
+
+@dp.message(Command("model"))
+async def command_model_handler(message: Message):
+    user_data = await check_user_access(message)
+    if not user_data:
+        return
+    if not user_data["can_use_gemma"]:
+        return await message.reply("⚠️ Администратор отключил вам доступ к ИИ-модели.")
+    await message.reply(
+        model_settings_text(message.from_user.id),
+        reply_markup=model_keyboard(message.from_user.id),
+    )
+
+
+@dp.callback_query(F.data.startswith("model_set_"))
+async def handle_model_choice(callback: CallbackQuery):
+    if not _can_use_gemma(callback.from_user.id):
+        return await callback.answer("Нет доступа.", show_alert=True)
+
+    pref = callback.data.removeprefix("model_set_")
+    if pref not in MODEL_TIERS:
+        return await callback.answer()
+    set_model_pref(callback.from_user.id, pref)
+
+    await callback.message.edit_text(
+        model_settings_text(callback.from_user.id),
+        reply_markup=model_keyboard(callback.from_user.id),
+    )
+    await callback.answer("Сохранено.")
+
+
+@dp.callback_query(F.data == "model_memory_toggle")
+async def handle_memory_toggle(callback: CallbackQuery):
+    if not _can_use_gemma(callback.from_user.id):
+        return await callback.answer("Нет доступа.", show_alert=True)
+
+    new_state = not get_memory_pref(callback.from_user.id)
+    set_memory_pref(callback.from_user.id, new_state)
+
+    await callback.message.edit_text(
+        model_settings_text(callback.from_user.id),
+        reply_markup=model_keyboard(callback.from_user.id),
+    )
+    await callback.answer("Память включена." if new_state else "Память выключена.")
+
+
 @dp.message(Command("gemma"))
 async def gemma_chat_mode_on(message: Message, state: FSMContext):
     user_data = await check_user_access(message)
@@ -449,7 +580,9 @@ async def _reply_with_gemma(message: Message, user_text: str):
         telegram_id=message.from_user.id,
         user_message=user_text,
         ollama_url=OLLAMA_URL,
-        session=http_session
+        session=http_session,
+        model=resolve_model(message.from_user.id),
+        keep_alive=resolve_keep_alive(message.from_user.id),
     )
 
     # Відповідь моделі може містити символи < > &, які ламають HTML-розмітку Telegram.
