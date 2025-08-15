@@ -15,7 +15,9 @@ _model_lock = threading.Lock()
 
 
 def _get_model() -> WhisperModel:
-    """Лениво грузим модель при первом голосовом сообщении, чтобы не тормозить старт бота."""
+    """Load the model on the first voice message, not at startup.
+
+    Loading takes seconds and most runs never get a voice message at all."""
     global _model
     if _model is None:
         # transcribe_voice runs in a thread, so two voice messages arriving
@@ -29,10 +31,10 @@ def _get_model() -> WhisperModel:
 
 
 def transcribe_voice(file_path: str) -> str:
-    """
-    Распознаёт речь из аудиофайла (ogg/opus от Telegram и другие форматы — декодирует сам через av).
-    Язык определяется автоматически. Вызывать из asyncio.to_thread — функция блокирующая.
-    """
+    """Transcribe an audio file. Telegram sends ogg/opus; av decodes the rest.
+
+    The language is detected automatically. This blocks, so call it through
+    asyncio.to_thread or it will stall the event loop."""
     model = _get_model()
     segments, _info = model.transcribe(file_path, beam_size=5)
     return " ".join(segment.text.strip() for segment in segments).strip()
