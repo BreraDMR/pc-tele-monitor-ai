@@ -62,7 +62,13 @@ async def ask_gemma(
         async with session.post(endpoint, json=payload, timeout=aiohttp.ClientTimeout(total=600)) as resp:
             if resp.status == 200:
                 result = await resp.json()
-                reply = result["message"]["content"]
+                reply = (result.get("message") or {}).get("content")
+                if not reply:
+                    # Happens when the model is killed mid-answer: status 200,
+                    # body without a message. A KeyError here used to surface
+                    # as a silent non-reply in the chat.
+                    logger.error("Ollama answered 200 with no content: %s", str(result)[:200])
+                    return "❌ The model returned an empty answer. Try again."
 
                 add_chat_message(telegram_id, "user", user_message)
                 add_chat_message(telegram_id, "assistant", reply)
