@@ -1,8 +1,14 @@
+import os
+
 import aiohttp
 import logging
 from database import add_chat_message, get_chat_history, add_token_usage
 
 logger = logging.getLogger("system_monitor.gemma")
+
+# A big model on a CPU-only host can take minutes, and a cold start adds the
+# reload on top. Raise it if the "very_strong" tier keeps timing out.
+REQUEST_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "600"))
 
 SYSTEM_PROMPT = (
     "You are a helpful and precise assistant. Answer briefly and "
@@ -11,7 +17,7 @@ SYSTEM_PROMPT = (
 
 
 def _estimate_tokens(text: str) -> int:
-    """Грубая оценка: ~4 символа на токен. Используется только если Ollama не вернула счётчики."""
+    """Rough guess at ~4 characters per token, used only when Ollama sends no counters."""
     return max(1, len(text) // 4)
 
 
@@ -56,10 +62,9 @@ async def ask_gemma(
         else:
             add_token_usage(telegram_id, _estimate_tokens(user_message), _estimate_tokens(reply), is_estimated=True)
 
-    # A big (very_strong) model on this CPU-only host can take minutes, plus a
-    # cold-start reload when it was unloaded -- keep the ceiling generous.
     try:
-        async with session.post(endpoint, json=payload, timeout=aiohttp.ClientTimeout(total=600)) as resp:
+        async with session.post(endpoint, json=payload,
+                                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)) as resp:
             if resp.status == 200:
                 result = await resp.json()
                 reply = (result.get("message") or {}).get("content")
