@@ -3,15 +3,15 @@ import os
 import hashlib
 import logging
 
-# Шлях до файлу БД. У Docker монтуємо каталог (напр. /app/data) і вказуємо
-# DB_PATH=/app/data/system_monitor_bot.db, щоб bind-mount не створював директорію
-# замість файлу. Для локального запуску лишається файл у поточній теці.
+# Path to the database file. In Docker we mount a directory (e.g. /app/data)
+# and point DB_PATH at a file inside it -- otherwise the bind mount creates a
+# directory where the file should be. Running locally it stays in the cwd.
 DB_PATH = os.getenv("DB_PATH", "system_monitor_bot.db")
 
 logger = logging.getLogger("system_monitor.db")
 
 def get_db_connection():
-    # Гарантуємо, що каталог для файлу БД існує
+    # Make sure the directory for the database file exists
     db_dir = os.path.dirname(DB_PATH)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
