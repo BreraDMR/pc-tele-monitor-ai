@@ -22,10 +22,10 @@ from aiogram.fsm.state import State, StatesGroup
 
 import psutil
 
-# Гарантуємо, що папка проєкту знаходиться в sys.path для уникнення помилок імпорту
+# Keep the project folder on sys.path so the local imports below resolve
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Прямі та чисті імпорти локальних модулів без крапок
+# Plain imports of the local modules, no package prefix
 from database import (
     init_db, get_user, register_user, is_login_taken,
     get_all_users, update_user_status, clear_chat_history, get_chat_history,
@@ -59,12 +59,12 @@ load_env()
 
 # Retrieve Configuration
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-# Підтримуємо список адмінів через ADMIN_TELEGRAM_IDS="123,456", а також стару
-# одиночну ADMIN_TELEGRAM_ID — для зворотної сумісності, якщо нової змінної немає.
+# Admins come from ADMIN_TELEGRAM_IDS="123,456"; the older single
+# ADMIN_TELEGRAM_ID still works so existing .env files keep running.
 _admin_ids_raw = os.getenv("ADMIN_TELEGRAM_IDS") or os.getenv("ADMIN_TELEGRAM_ID") or ""
 ADMIN_IDS = {int(x.strip()) for x in _admin_ids_raw.split(",") if x.strip()}
-# Підтримуємо обидва імені змінної — в .env історично трапляється OLLAMA_API_URL,
-# хоча .env.example і код орієнтовані на OLLAMA_URL.
+# Both names are accepted: OLLAMA_API_URL shows up in older .env files,
+# while .env.example and everything here talk about OLLAMA_URL.
 OLLAMA_URL = os.getenv("OLLAMA_URL") or os.getenv("OLLAMA_API_URL") or "http://192.168.56.1:11434"
 
 # Three AI model tiers a user can pick via /model. resolve_model() maps the
@@ -118,10 +118,10 @@ logger.info(f"System Monitor Bot starting. Target disk path: '{DISK_PATH}'")
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# Єдина aiohttp-сесія для всіх запитів до Ollama (створюється в main(), а не на кожен запит)
+# One aiohttp session for every Ollama call, created in main() rather than per request
 http_session: aiohttp.ClientSession | None = None
 
-# Ініціалізація станів FSM
+# FSM states
 class RegisterStates(StatesGroup):
     waiting_for_login = State()
     waiting_for_password = State()
