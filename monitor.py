@@ -65,7 +65,11 @@ _admin_ids_raw = os.getenv("ADMIN_TELEGRAM_IDS") or os.getenv("ADMIN_TELEGRAM_ID
 ADMIN_IDS = {int(x.strip()) for x in _admin_ids_raw.split(",") if x.strip()}
 # Both names are accepted: OLLAMA_API_URL shows up in older .env files,
 # while .env.example and everything here talk about OLLAMA_URL.
-OLLAMA_URL = os.getenv("OLLAMA_URL") or os.getenv("OLLAMA_API_URL") or "http://192.168.56.1:11434"
+# Same default as .env.example: from inside the container the host is
+# reachable as host.docker.internal, and a stale VM address here was a
+# confusing way to find out the variable had not been set.
+OLLAMA_URL = (os.getenv("OLLAMA_URL") or os.getenv("OLLAMA_API_URL")
+              or "http://host.docker.internal:11434")
 
 # Three AI model tiers a user can pick via /model. resolve_model() maps the
 # stored 'weak'/'strong'/'very_strong' preference to the actual Ollama model.
