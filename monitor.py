@@ -576,10 +576,10 @@ async def gemma_chat_mode_off(message: Message, state: FSMContext):
     await message.reply("👋 AI Chat Mode closed.")
 
 async def _reply_with_gemma(message: Message, user_text: str):
-    """Спільна логіка для текстового і голосового режиму /gemma."""
+    """Shared by the text and the voice side of /gemma."""
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
-    # Історія (user + assistant) зберігається всередині ask_gemma — тут не дублюємо
+    # ask_gemma stores both sides of the exchange itself, so nothing to do here
     response = await ask_gemma(
         telegram_id=message.from_user.id,
         user_message=user_text,
@@ -589,8 +589,8 @@ async def _reply_with_gemma(message: Message, user_text: str):
         keep_alive=resolve_keep_alive(message.from_user.id),
     )
 
-    # Відповідь моделі може містити символи < > &, які ламають HTML-розмітку Telegram.
-    # Екрануємо й ріжемо на частини, бо ліміт повідомлення Telegram — 4096 символів.
+    # A model answer can contain < > & and break Telegram's HTML parsing, so
+    # escape it, then split: 4096 characters is the hard message limit.
     safe_response = html.escape(response)
     for chunk_start in range(0, len(safe_response), 4096):
         await message.reply(safe_response[chunk_start:chunk_start + 4096])
