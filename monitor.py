@@ -722,18 +722,18 @@ async def command_auditlog_handler(message: Message):
     for chunk_start in range(0, len(report), 4096):
         await message.reply(report[chunk_start:chunk_start + 4096])
 
-# --- ЗАПУСК ---
+# --- STARTUP ---
 async def main() -> None:
     global http_session
     init_db()
 
     procfs_path = os.getenv("PROCFS_PATH")
     if procfs_path:
-        # Застосовуємо тільки якщо шлях реально існує — інакше psutil впаде на
-        # читанні /status з помилкою "No such file or directory: .../proc/stat".
+        # Only apply it if the path is really there: otherwise psutil dies
+        # reading /status with "No such file or directory: .../proc/stat".
         if os.path.isdir(procfs_path):
             logger.info(f"Using custom PROCFS_PATH: {procfs_path}")
-            # psutil читає шлях до procfs з атрибута модуля, а не з env-змінної
+            # psutil takes procfs from a module attribute, not from the env
             psutil.PROCFS_PATH = procfs_path
         else:
             logger.warning(
@@ -741,7 +741,7 @@ async def main() -> None:
                 f"using the container's own /proc instead."
             )
 
-    # Базовое "/"-меню для незарегистрированных/неизвестных чатов
+    # The bare "/" menu that unregistered chats get
     await bot.set_my_commands(
         build_command_list(is_admin=False),
         scope=BotCommandScopeDefault()
