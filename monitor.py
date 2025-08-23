@@ -133,7 +133,7 @@ class RegisterStates(StatesGroup):
 class GemmaStates(StatesGroup):
     chatting = State()
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ МОНИТОРИНГА ---
+# --- MONITORING HELPERS ---
 def make_progress_bar(percent: float, length: int = 10) -> str:
     filled_length = int(round(length * percent / 100))
     bar = '█' * filled_length + '░' * (length - filled_length)
@@ -163,7 +163,7 @@ async def fetch_system_metrics():
         disk_info = {"total": "N/A", "used": "N/A", "free": "N/A", "percent": 0.0, "error": str(e)}
     return cpu_usage, mem, disk_info
 
-# --- "/"-МЕНЮ КОМАНД TELEGRAM ---
+# --- THE TELEGRAM "/" COMMAND MENU ---
 def build_command_list(is_admin: bool, can_use_status: int = 0, can_use_gemma: int = 0) -> list[BotCommand]:
     commands = [
         BotCommand(command="start", description="Приветствие и статус доступа"),
@@ -202,7 +202,7 @@ async def apply_user_commands(telegram_id: int, is_admin: bool, can_use_status: 
     except Exception:
         logger.exception(f"Failed to set command menu for {telegram_id}")
 
-# --- МИДЛВАРЬ / ПРОВЕРКА ДЕЙСТВИЙ ---
+# --- MIDDLEWARE / ACCESS CHECKS ---
 async def check_user_access(message: Message) -> dict | None:
     if is_admin(message.from_user.id):
         return {"status": "approved", "can_use_status": 1, "can_use_gemma": 1}
@@ -219,7 +219,7 @@ async def check_user_access(message: Message) -> dict | None:
         
     return user
 
-# --- ХЭНДЛЕРЫ ---
+# --- HANDLERS ---
 
 @dp.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
@@ -467,7 +467,7 @@ async def process_user_ban_unban(callback: CallbackQuery):
             
     await callback.message.edit_text(report, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_list))
 
-# --- /model (выбор модели ИИ + переключатель памяти, на пользователя) ---
+# --- /model: pick the AI tier and toggle memory, per user ---
 
 def _can_use_gemma(user_id: int) -> bool:
     if is_admin(user_id):
