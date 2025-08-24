@@ -7,14 +7,20 @@ services:
     env_file:
       - .env
     environment:
-      # БД лежить у змонтованому каталозі /app/data, а не окремим bind-mount файлом
+      # The database lives inside the mounted /app/data directory, not as its own bind mount
       - DB_PATH=/app/data/system_monitor_bot.db
-      # Кеш моделі Whisper лежить там само, щоб не качати її повторно при кожному перезбірці образу
+      # The whisper cache sits next to it, so a rebuild does not re-download the model
       - WHISPER_MODEL_DIR=/app/data/whisper_models
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      # Монтуємо КАТАЛОГ, а не файл — інакше Docker створить директорію замість БД
+      # Mount the DIRECTORY, not the file - Docker would create a directory instead of the db
       - ./data:/app/data
     restart: unless-stopped
     command: python monitor.py
+    logging:
+      # A chatty bot fills the json log over weeks; cap it and move on.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
