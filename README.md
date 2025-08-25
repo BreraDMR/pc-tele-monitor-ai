@@ -106,7 +106,12 @@ Once the bot is running and you have been approved by the administrator (if you 
 - Send `/start` to the bot to see the welcome message and available commands.
 - **`/register`**: (For non-admin users) Initiate the registration process by providing a desired login and password. Your request will be sent to the administrator for approval.
 - **`/status`**: Get a report on the system's CPU, RAM, and disk usage.
-- **`/gemma`**: Enter AI chat mode to converse with the Gemma 2 9B model. Type `/bye` to exit chat mode.
+- Voice messages work in AI chat mode — they are transcribed locally with
+  faster-whisper, so nothing leaves the machine.
+- **`/gemma`**: Enter AI chat mode. Type `/bye` to leave it.
+- **`/model`**: Pick which model answers you — a small fast one by default, or a
+  heavier tier when the answer matters more than the wait — and toggle whether the
+  bot keeps the conversation in memory between messages. The choice is per user.
 - **`/admin`**: (Admin only) Access the administration panel to manage user approvals, rejections, bans, and unbans.
 
 ## Technologies Used
@@ -116,7 +121,9 @@ Once the bot is running and you have been approved by the administrator (if you 
 - **psutil**: Cross-platform library for retrieving process and system utilization (CPU, memory, disks, network, sensors) in Python.
 - **SQLite**: Lightweight, file-based database for storing user information and chat history.
 - **Ollama**: Platform for running large language models locally.
-- **Gemma 2 9B**: Large Language Model by Google, used for AI chat capabilities.
+- **Local models via Ollama**: the default is a small quantized model, with heavier
+  tiers selectable through `/model`. On a CPU-only host the small one is the one
+  you actually use; the big tier is for when you can wait a minute.
 - **Docker**: Containerization platform for easy deployment.
 - **Docker Compose**: Tool for defining and running multi-container Docker applications.
 
