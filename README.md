@@ -9,8 +9,7 @@
 [![psutil](https://img.shields.io/badge/psutil-system%20metrics-4B8BBE?style=for-the-badge)](monitor.py)
 [![Ollama](https://img.shields.io/badge/Ollama-Gemma%202-000000?logo=ollama&logoColor=white&style=for-the-badge)](gemma.py)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white&style=for-the-badge)](docker-compose.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
-
+[![License: PolyForm NC](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue?style=for-the-badge)](LICENSE)
 </div>
 
 > My first home-lab project — the starting point for [homelab-wsl](https://github.com/BreraDMR/homelab-wsl).
@@ -129,4 +128,7 @@ Once the bot is running and you have been approved by the administrator (if you 
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Licensed under [PolyForm Noncommercial 1.0.0](LICENSE) — free for personal,
+educational, and other noncommercial use. Commercial use requires a separate
+license; contact damir.brera.eb@gmail.com.
+
