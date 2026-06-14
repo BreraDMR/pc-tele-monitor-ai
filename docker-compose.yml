@@ -1,17 +1,18 @@
+
 version: '3.8'
 
 services:
-  monitor_bot:
+  bot:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: system_monitor_bot
-    restart: unless-stopped
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
-      # Mount the WSL2 kernel proc/sys interfaces to let psutil view host-level CPU and memory metrics
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      # Mount the Windows C:\ host drive as read-only to monitor disk space utilization
-      - C:/:/host_c:ro
+      - ./system_monitor_bot.db:/app/system_monitor_bot.db
+      - C:\:/host_c # For Windows host, adjust if on Linux/macOS
+    restart: unless-stopped
+    command: python monitor.py

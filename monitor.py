@@ -14,12 +14,12 @@ from aiogram.fsm.state import State, StatesGroup
 
 import psutil
 
-# Импортируем созданные модули локальной БД и ИИ
-from system_monitor_bot.database import (
+# Импортируем созданные модули локальной БД и ИИ напрямую
+from database import (
     init_db, get_user, register_user, is_login_taken, 
-    get_all_users, update_user_status
+    get_all_users, update_user_status, add_chat_message, get_chat_history
 )
-from system_monitor_bot.gemma import ask_gemma
+from gemma import ask_gemma
 
 # Configure logging
 logging.basicConfig(
@@ -68,6 +68,10 @@ class RegisterStates(StatesGroup):
     waiting_for_login = State()
     waiting_for_password = State()
 
+# Инициализируем состояния FSM для AI чата
+class GemmaStates(StatesGroup):
+    chatting = State()
+
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ МОНИТОРИНГА ---
 def make_progress_bar(percent: float, length: int = 10) -> str:
     filled_length = int(round(length * percent / 100))
@@ -105,15 +109,13 @@ async def check_user_access(message: Message) -> dict | None:
         return {"status": "approved", "can_use_status": 1, "can_use_gemma": 1}
         
     user = get_user(message.from_user.id)
-    if not user:
-        await message.reply("🔒 Для работы с ботом необходимо пройти регистрацию.\nИспользуйте команду /register")
-        return None
-    
-    if user["status"] == "pending_approval":
-        await message.reply("⏳ Ваша заявка всё еще находится на рассмотрении у Администратора.")
-        return None
-    if user["status"] in ["rejected", "banned"]:
-        await message.reply("❌ Доступ к боту заблокирован или был отклонен.")
+    if not user or user["status"] != "approved":
+        if not user:
+            await message.reply("🔒 Для работы с ботом необходимо пройти регистрацию.\nИспользуйте команду /register")
+        elif user["status"] == "pending_approval":
+            await message.reply("⏳ Ваша заявка всё еще находится на рассмотрении у Администратора.")
+        elif user["status"] in ["rejected", "banned"]:
+            await message.reply("❌ Доступ к боту заблокирован или был отклонен.")
         return None
         
     return user
@@ -128,11 +130,11 @@ async def command_start_handler(message: Message) -> None:
     welcome_text = f"👋 <b>Welcome to the Secure System Monitor Bot!</b>\n\n"
     
     if is_admin:
-        welcome_text += "👑 Вы являетесь администратором системы.\nДоступные команды:\n📊 /status - Просмотр метрик\n🛠️ /admin - Панель управления"
+        welcome_text += "👑 Вы являетесь администратором системы.\nДоступные команды:\n📊 /status - Просмотр метрик\n🛠️ /admin - Панель управления\n🧠 /gemma - Чат с AI"
     elif user and user["status"] == "approved":
         welcome_text += "✅ Вы успешно авторизованы.\n\n<b>Доступные функции:</b>\n"
         if user["can_use_status"]: welcome_text += "📊 /status - Получить системный отчет\n"
-        if user["can_use_gemma"]: welcome_text += "🧠 Отправьте любое текстовое сообщение, чтобы пообщаться с локальной Gemma 2 9B!"
+        if user["can_use_gemma"]: welcome_text += "🧠 /gemma - Чат с AI"
     else:
         welcome_text += "🔒 Доступ закрыт. Чтобы начать использование, пройдите регистрацию:\n📝 /register"
         
@@ -325,14 +327,27 @@ async def process_user_ban_unban(callback: CallbackQuery):
     await callback.message.edit_text(report, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_list))
 
 # --- ИНТЕГРАЦИЯ С GEMMA 2 9B ---
-@dp.message(F.text & ~F.text.startswith("/"))
-async def chat_with_gemma_handler(message: Message):
+@dp.message(Command("gemma"))
+async def gemma_chat_mode_on(message: Message, state: FSMContext):
     user_data = await check_user_access(message)
     if not user_data: return
-    
+
     if not user_data["can_use_gemma"]:
         return await message.reply("⚠️ Администратор отключил вам доступ к ИИ-модели Gemma 2.")
-        
+
+    await state.set_state(GemmaStates.chatting)
+    await message.reply("🧠 AI Chat Mode activated! Type your questions. To exit, type /bye")
+
+@dp.message(GemmaStates.chatting, Command("bye"))
+async def gemma_chat_mode_off(message: Message, state: FSMContext):
+    await state.clear()
+    await message.reply("👋 AI Chat Mode closed.")
+
+@dp.message(GemmaStates.chatting, F.text)
+async def chat_with_gemma_handler(message: Message):
+    user_data = await check_user_access(message)
+    if not user_data: return # Should not happen if FSM is correctly managed, but for safety
+
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
     response = await ask_gemma(
@@ -340,6 +355,9 @@ async def chat_with_gemma_handler(message: Message):
         user_message=message.text,
         ollama_url=OLLAMA_URL
     )
+    
+    add_chat_message(message.from_user.id, "user", message.text)
+    add_chat_message(message.from_user.id, "assistant", response)
     
     await message.reply(response)
 
