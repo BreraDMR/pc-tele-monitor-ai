@@ -17,12 +17,19 @@ import psutil
 # Ensure the script's directory is in sys.path so local modules (database, gemma) can be imported
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Импортируем созданные модули локальной БД и ИИ напрямую
-from database import (
-    init_db, get_user, register_user, is_login_taken, 
-    get_all_users, update_user_status, add_chat_message, get_chat_history
-)
-from gemma import ask_gemma
+# Надійний імпорт локальних модулів для роботи як у Docker, так і локально
+try:
+    from .database import (
+        init_db, get_user, register_user, is_login_taken, 
+        get_all_users, update_user_status, add_chat_message, get_chat_history
+    )
+    from .gemma import ask_gemma
+except (ImportError, ValueError):
+    from database import (
+        init_db, get_user, register_user, is_login_taken, 
+        get_all_users, update_user_status, add_chat_message, get_chat_history
+    )
+    from gemma import ask_gemma
 
 # Configure logging
 logging.basicConfig(
