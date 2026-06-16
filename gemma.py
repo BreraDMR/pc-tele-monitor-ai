@@ -1,6 +1,6 @@
 import aiohttp
 import logging
-from system_monitor_bot.database import add_chat_message, get_chat_history
+from database import add_chat_message, get_chat_history
 
 logger = logging.getLogger("system_monitor.gemma")
 
@@ -29,10 +29,11 @@ async def ask_gemma(telegram_id: int, user_message: str, ollama_url: str) -> str
     
     endpoint = f"{ollama_url.rstrip('/')}/v1/chat/completions"
     logger.info(f"Sending prompt to Gemma at {endpoint}...")
-    
+
+    timeout = aiohttp.ClientTimeout(total=60)
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(endpoint, json=payload, timeout=60) as resp:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(endpoint, json=payload) as resp:
                 if resp.status == 200:
                     result = await resp.json()
                     reply = result["choices"][0]["message"]["content"]
@@ -48,7 +49,7 @@ async def ask_gemma(telegram_id: int, user_message: str, ollama_url: str) -> str
                     if "model not found" in err_text.lower() or "404" in str(resp.status):
                         logger.warning("gemma2:9b model not found, trying fallback to 'gemma2' or 'gemma'")
                         payload["model"] = "gemma2"
-                        async with session.post(endpoint, json=payload, timeout=60) as fallback_resp:
+                        async with session.post(endpoint, json=payload) as fallback_resp:
                             if fallback_resp.status == 200:
                                 result = await fallback_resp.json()
                                 reply = result["choices"][0]["message"]["content"]
