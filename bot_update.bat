@@ -1,35 +1,47 @@
 @echo off
 chcp 65001 > nul
+title Auto-Update ^& Launch ^| PC Tele Monitor AI
 
-echo 📥 Шаг 1: Переходим в папку с ботом...
-cd /d C:\Users\user\pc-tele-monitor-ai
-
-:: Ждем, пока Docker Desktop полностью раздуплится в фоне
-echo Ожидание запуска Docker...
-timeout /t 15 /nobreak
-
-echo.
-echo 🔄 Шаг 2: Очистка папки (кроме важных файлов)...
-for %%i in (*) do (
-    if not "%%~nxi"==".env" if not "%%~nxi"=="bot_update.bat" del /f /q "%%i"
-)
-for /d %%i in (*) do (
-    if not "%%~nxi"==".git" rd /s /q "%%i"
-)
-
-echo 🔄 Шаг 2.1: Сброс Git и полное обновление из репозитория...
-git reset --hard
-git pull origin main
+:: ===================== НАСТРОЙКИ =====================
+set "PROJECT_DIR=C:\Users\user\pc-tele-monitor-ai"
+set "REPO_URL=https://github.com/BreraDMR/pc-tele-monitor-ai.git"
+set "BRANCH=main"
+:: ====================================================
 
 echo.
-echo 🏗️ Шаг 3: Пересборка и запуск через Docker Compose...
-:: compose сам остановит старый контейнер, пересоберет образ и запустит его
+echo === Шаг 1: Ждём 10 секунд, пока Docker Desktop полностью загрузится...
+timeout /t 10 /nobreak > nul
+
+echo.
+echo === Шаг 2: Переходим в папку проекта...
+cd /d "%PROJECT_DIR%"
+
+:: Если git-репозиторий ещё не подключён — инициализируем его БЕЗ удаления .env и data/
+if not exist ".git" (
+    echo .git не найден — подключаю репозиторий GitHub...
+    git init
+    git remote add origin "%REPO_URL%"
+)
+
+echo.
+echo === Шаг 3: Полная синхронизация с GitHub ===
+:: Забираем последнюю версию из репозитория
+git fetch origin %BRANCH%
+:: Затираем ВСЕ локальные изменения и приводим папку к точной версии с GitHub
+git reset --hard origin/%BRANCH%
+:: Удаляем лишние неотслеживаемые файлы (мусор).
+:: ВАЖНО: .env и папка data/ (с базой) НЕ трогаются — они в .gitignore,
+:: поэтому используем git clean без флага -x.
+git clean -fd
+
+echo.
+echo === Шаг 4: Пересборка и запуск в Docker ===
+:: compose сам остановит старый контейнер, пересоберёт образ и запустит заново
 docker-compose down
 docker-compose up --build -d
 
 echo.
-echo 🎉 Готово! Бот успешно обновлён и запущен.
-echo 📺 Логи запуска (нажми Ctrl+C для выхода):
-:: Меняем имя контейнера на то, которое генерирует docker-compose (обычно папка_сервис_1)
+echo === Готово! Бот обновлён из GitHub и запущен. ===
+echo Логи (Ctrl+C — выйти; контейнер продолжит работать в фоне):
 docker-compose logs -f --tail=50
 pause
