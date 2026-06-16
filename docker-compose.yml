@@ -6,9 +6,13 @@ services:
     container_name: system_monitor_bot
     env_file:
       - .env
+    environment:
+      # БД лежить у змонтованому каталозі /app/data, а не окремим bind-mount файлом
+      - DB_PATH=/app/data/system_monitor_bot.db
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./system_monitor_bot.db:/app/system_monitor_bot.db
+      # Монтуємо КАТАЛОГ, а не файл — інакше Docker створить директорію замість БД
+      - ./data:/app/data
     restart: unless-stopped
     command: python monitor.py
