@@ -5,13 +5,18 @@ import sys
 import html
 import logging
 import asyncio
+import tempfile
 from pathlib import Path
 
+import aiohttp
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
+    BotCommand, BotCommandScopeDefault, BotCommandScopeChat
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -23,9 +28,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Прямі та чисті імпорти локальних модулів без крапок
 from database import (
     init_db, get_user, register_user, is_login_taken,
-    get_all_users, update_user_status
+    get_all_users, update_user_status, clear_chat_history, get_chat_history,
+    get_token_usage_per_user, get_total_token_usage,
+    add_audit_log, get_audit_log
 )
 from gemma import ask_gemma
+from voice import transcribe_voice
 
 # Configure logging
 logging.basicConfig(
@@ -50,17 +58,23 @@ load_env()
 
 # Retrieve Configuration
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_TELEGRAM_ID")
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://192.168.56.1:11434")
+# Підтримуємо список адмінів через ADMIN_TELEGRAM_IDS="123,456", а також стару
+# одиночну ADMIN_TELEGRAM_ID — для зворотної сумісності, якщо нової змінної немає.
+_admin_ids_raw = os.getenv("ADMIN_TELEGRAM_IDS") or os.getenv("ADMIN_TELEGRAM_ID") or ""
+ADMIN_IDS = {int(x.strip()) for x in _admin_ids_raw.split(",") if x.strip()}
+# Підтримуємо обидва імені змінної — в .env історично трапляється OLLAMA_API_URL,
+# хоча .env.example і код орієнтовані на OLLAMA_URL.
+OLLAMA_URL = os.getenv("OLLAMA_URL") or os.getenv("OLLAMA_API_URL") or "http://192.168.56.1:11434"
 
 if not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
     logger.error("TELEGRAM_BOT_TOKEN is not set. Please update your .env file.")
     sys.exit("Error: TELEGRAM_BOT_TOKEN is not configured.")
 
-if not ADMIN_ID:
-    logger.error("ADMIN_TELEGRAM_ID is not set in .env!")
-else:
-    ADMIN_ID = int(ADMIN_ID)
+if not ADMIN_IDS:
+    logger.error("ADMIN_TELEGRAM_IDS (or legacy ADMIN_TELEGRAM_ID) is not set in .env!")
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
 
 DISK_PATH = os.getenv("MONITOR_DISK_PATH", "/")
 logger.info(f"System Monitor Bot starting. Target disk path: '{DISK_PATH}'")
@@ -68,6 +82,9 @@ logger.info(f"System Monitor Bot starting. Target disk path: '{DISK_PATH}'")
 # Initialize Bot and Dispatcher
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
+
+# Єдина aiohttp-сесія для всіх запитів до Ollama (створюється в main(), а не на кожен запит)
+http_session: aiohttp.ClientSession | None = None
 
 # Ініціалізація станів FSM
 class RegisterStates(StatesGroup):
@@ -107,9 +124,46 @@ async def fetch_system_metrics():
         disk_info = {"total": "N/A", "used": "N/A", "free": "N/A", "percent": 0.0, "error": str(e)}
     return cpu_usage, mem, disk_info
 
+# --- "/"-МЕНЮ КОМАНД TELEGRAM ---
+def build_command_list(is_admin: bool, can_use_status: int = 0, can_use_gemma: int = 0) -> list[BotCommand]:
+    commands = [
+        BotCommand(command="start", description="Приветствие и статус доступа"),
+        BotCommand(command="help", description="Справка по командам"),
+    ]
+    if is_admin:
+        commands += [
+            BotCommand(command="status", description="Системный отчёт CPU/RAM/диск"),
+            BotCommand(command="gemma", description="Чат с ИИ"),
+            BotCommand(command="history", description="Последние сообщения с ИИ"),
+            BotCommand(command="forget", description="Очистить память диалога с ИИ"),
+            BotCommand(command="admin", description="Панель управления пользователями"),
+            BotCommand(command="tokens", description="Расход токенов по пользователям"),
+            BotCommand(command="auditlog", description="Журнал действий админов"),
+        ]
+        return commands
+
+    if can_use_status:
+        commands.append(BotCommand(command="status", description="Системный отчёт CPU/RAM/диск"))
+    if can_use_gemma:
+        commands.append(BotCommand(command="gemma", description="Чат с ИИ"))
+        commands.append(BotCommand(command="history", description="Последние сообщения с ИИ"))
+        commands.append(BotCommand(command="forget", description="Очистить память диалога с ИИ"))
+    if not can_use_status and not can_use_gemma:
+        commands.append(BotCommand(command="register", description="Подать заявку на доступ"))
+    return commands
+
+async def apply_user_commands(telegram_id: int, is_admin: bool, can_use_status: int = 0, can_use_gemma: int = 0):
+    try:
+        await bot.set_my_commands(
+            build_command_list(is_admin, can_use_status, can_use_gemma),
+            scope=BotCommandScopeChat(chat_id=telegram_id)
+        )
+    except Exception:
+        logger.exception(f"Failed to set command menu for {telegram_id}")
+
 # --- МИДЛВАРЬ / ПРОВЕРКА ДЕЙСТВИЙ ---
 async def check_user_access(message: Message) -> dict | None:
-    if ADMIN_ID and message.from_user.id == ADMIN_ID:
+    if is_admin(message.from_user.id):
         return {"status": "approved", "can_use_status": 1, "can_use_gemma": 1}
         
     user = get_user(message.from_user.id)
@@ -129,49 +183,58 @@ async def check_user_access(message: Message) -> dict | None:
 @dp.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
     user = get_user(message.from_user.id)
-    is_admin = ADMIN_ID and message.from_user.id == ADMIN_ID
-    
+    user_is_admin = is_admin(message.from_user.id)
+
     welcome_text = f"👋 <b>Welcome to the Secure System Monitor Bot!</b>\n\n"
-    
-    if is_admin:
-        welcome_text += "👑 Вы являетесь администратором системы.\nДоступные команды:\n📊 /status - Просмотр метрик\n🛠️ /admin - Панель управления\n🧠 /gemma - Чат с AI"
+
+    if user_is_admin:
+        welcome_text += "👑 Вы являетесь администратором системы.\nДоступные команды:\n📊 /status - Просмотр метрик\n🛠️ /admin - Панель управления\n🧠 /gemma - Чат с AI\n📈 /tokens - Расход токенов\n📜 /auditlog - Журнал действий админов"
+        await apply_user_commands(message.from_user.id, is_admin=True)
     elif user and user["status"] == "approved":
         welcome_text += "✅ Вы успешно авторизованы.\n\n<b>Доступные функции:</b>\n"
         if user["can_use_status"]: welcome_text += "📊 /status - Получить системный отчет\n"
-        if user["can_use_gemma"]: welcome_text += "🧠 /gemma - Чат с AI"
+        if user["can_use_gemma"]: welcome_text += "🧠 /gemma - Чат с AI\n🗂️ /history - История диалога\n🧹 /forget - Очистить память\n"
+        await apply_user_commands(message.from_user.id, is_admin=False, can_use_status=user["can_use_status"], can_use_gemma=user["can_use_gemma"])
     else:
         welcome_text += "🔒 Доступ закрыт. Чтобы начать использование, пройдите регистрацию:\n📝 /register"
+        await apply_user_commands(message.from_user.id, is_admin=False)
 
     welcome_text += "\n\nℹ️ /help — список всех команд"
     await message.reply(welcome_text)
 
 @dp.message(Command("help"))
 async def command_help_handler(message: Message) -> None:
-    is_admin = ADMIN_ID and message.from_user.id == ADMIN_ID
+    user_is_admin = is_admin(message.from_user.id)
     user = get_user(message.from_user.id)
 
     text = "ℹ️ <b>Справка по командам</b>\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
     text += "▫️ /start — приветствие и статус доступа\n"
     text += "▫️ /help — эта справка\n"
 
-    if is_admin:
+    if user_is_admin:
         text += "📊 /status — системный отчёт (CPU/RAM/диск)\n"
         text += "🧠 /gemma — чат с ИИ (выход — /bye)\n"
+        text += "🗂️ /history — последние сообщения с ИИ\n"
+        text += "🧹 /forget — очистить память диалога с ИИ\n"
         text += "👑 /admin — панель управления пользователями\n"
+        text += "📈 /tokens — расход токенов по пользователям\n"
+        text += "📜 /auditlog — журнал действий админов\n"
     elif user and user["status"] == "approved":
         if user["can_use_status"]:
             text += "📊 /status — системный отчёт (CPU/RAM/диск)\n"
         if user["can_use_gemma"]:
             text += "🧠 /gemma — чат с ИИ (выход — /bye)\n"
+            text += "🗂️ /history — последние сообщения с ИИ\n"
+            text += "🧹 /forget — очистить память диалога с ИИ\n"
     else:
         text += "📝 /register — подать заявку на доступ\n"
 
-    text += "\n<i>В режиме ИИ-чата напишите /bye, чтобы выйти.</i>"
+    text += "\n<i>В режиме ИИ-чата напишите /bye, чтобы выйти. Также можно прислать голосовое сообщение — оно будет распознано и передано ИИ.</i>"
     await message.reply(text)
 
 @dp.message(Command("register"))
 async def start_registration(message: Message, state: FSMContext):
-    if ADMIN_ID and message.from_user.id == ADMIN_ID:
+    if is_admin(message.from_user.id):
         return await message.reply("👑 Админу не нужно регистрироваться!")
         
     user = get_user(message.from_user.id)
@@ -215,46 +278,54 @@ async def process_password(message: Message, state: FSMContext):
     if success:
         await message.reply("🎉 Регистрация завершена! Ваша учетная запись отправлена Администратору на одобрение. Ожидайте.")
         
-        if ADMIN_ID:
+        if ADMIN_IDS:
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve_{message.from_user.id}"),
                     InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{message.from_user.id}")
                 ]
             ])
-            await bot.send_message(
-                ADMIN_ID,
-                f"🔔 <b>Новая заявка на регистрацию!</b>\n\n"
-                f"👤 Пользователь: {message.from_user.full_name}\n"
-                f"🏷️ Username: @{message.from_user.username or 'none'}\n"
-                f"🆔 ID: <code>{message.from_user.id}</code>\n"
-                f"📝 Выбранный логин: <code>{login}</code>",
-                reply_markup=kb
-            )
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.send_message(
+                        admin_id,
+                        f"🔔 <b>Новая заявка на регистрацию!</b>\n\n"
+                        f"👤 Пользователь: {html.escape(message.from_user.full_name)}\n"
+                        f"🏷️ Username: @{html.escape(message.from_user.username or 'none')}\n"
+                        f"🆔 ID: <code>{message.from_user.id}</code>\n"
+                        f"📝 Выбранный логин: <code>{html.escape(login)}</code>",
+                        reply_markup=kb
+                    )
+                except Exception:
+                    logger.exception(f"Failed to notify admin {admin_id} about new registration")
     else:
         await message.reply("❌ Произошла ошибка при сохранении данных. Попробуйте снова через /register")
 
 @dp.callback_query(F.data.startswith("approve_") | F.data.startswith("reject_"))
 async def handle_approval_buttons(callback: CallbackQuery):
-    if not ADMIN_ID or callback.from_user.id != ADMIN_ID:
+    if not is_admin(callback.from_user.id):
         return await callback.answer("У вас нет прав на это действие.", show_alert=True)
-        
+
     action, target_id = callback.data.split("_")
     target_id = int(target_id)
-    
+    admin_label = f"@{callback.from_user.username}" if callback.from_user.username else callback.from_user.full_name
+
     if action == "approve":
         update_user_status(target_id, "approved", 1, 1)
+        add_audit_log(callback.from_user.id, admin_label, "approve", target_id)
+        await apply_user_commands(target_id, is_admin=False, can_use_status=1, can_use_gemma=1)
         await callback.message.edit_text(f"✅ Пользователь <code>{target_id}</code> успешно одобрен!")
         try:
             await bot.send_message(target_id, "🎉 Поздравляем! Администратор одобрил ваш доступ к боту. Используйте /start.")
         except Exception: pass
     else:
         update_user_status(target_id, "rejected")
+        add_audit_log(callback.from_user.id, admin_label, "reject", target_id)
         await callback.message.edit_text(f"❌ Заявка пользователя <code>{target_id}</code> отклонена.")
         try:
             await bot.send_message(target_id, "❌ Ваша заявка на доступ к боту была отклонена администратором.")
         except Exception: pass
-        
+
     await callback.answer()
 
 @dp.message(Command("status"))
@@ -299,8 +370,8 @@ async def command_status_handler(message: Message) -> None:
 
 @dp.message(Command("admin"))
 async def admin_panel_handler(message: Message):
-    if not ADMIN_ID or message.from_user.id != ADMIN_ID:
-        return 
+    if not is_admin(message.from_user.id):
+        return
         
     users = get_all_users()
     if not users:
@@ -311,7 +382,7 @@ async def admin_panel_handler(message: Message):
     
     for u in users[:10]:
         status_icon = "⏳" if u['status'] == 'pending_approval' else "✅" if u['status'] == 'approved' else "❌"
-        report += f"{status_icon} Логин: <code>{u['login']}</code> | ID: <code>{u['telegram_id']}</code>\n"
+        report += f"{status_icon} Логин: <code>{html.escape(u['login'])}</code> | ID: <code>{u['telegram_id']}</code>\n"
         report += f"└ Права: Сводка={u['can_use_status']} | ИИ={u['can_use_gemma']}\n\n"
         
         if u['status'] == 'approved':
@@ -323,15 +394,20 @@ async def admin_panel_handler(message: Message):
 
 @dp.callback_query(F.data.startswith("ban_") | F.data.startswith("unban_"))
 async def process_user_ban_unban(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
+    if not is_admin(callback.from_user.id): return
     action, target_id = callback.data.split("_")
     target_id = int(target_id)
-    
+    admin_label = f"@{callback.from_user.username}" if callback.from_user.username else callback.from_user.full_name
+
     if action == "ban":
         update_user_status(target_id, "banned")
+        add_audit_log(callback.from_user.id, admin_label, "ban", target_id)
+        await apply_user_commands(target_id, is_admin=False)
         await callback.answer("Пользователь забанен!")
     else:
         update_user_status(target_id, "approved", 1, 1)
+        add_audit_log(callback.from_user.id, admin_label, "unban", target_id)
+        await apply_user_commands(target_id, is_admin=False, can_use_status=1, can_use_gemma=1)
         await callback.answer("Пользователь разбанен!")
         
     users = get_all_users()
@@ -339,7 +415,7 @@ async def process_user_ban_unban(callback: CallbackQuery):
     kb_list = []
     for u in users[:10]:
         status_icon = "⏳" if u['status'] == 'pending_approval' else "✅" if u['status'] == 'approved' else "❌"
-        report += f"{status_icon} Логин: <code>{u['login']}</code> | ID: <code>{u['telegram_id']}</code>\n"
+        report += f"{status_icon} Логин: <code>{html.escape(u['login'])}</code> | ID: <code>{u['telegram_id']}</code>\n"
         report += f"└ Права: Сводка={u['can_use_status']} | ИИ={u['can_use_gemma']}\n\n"
         if u['status'] == 'approved':
             kb_list.append([InlineKeyboardButton(text=f"🚫 Бан {u['login']}", callback_data=f"ban_{u['telegram_id']}")])
@@ -364,18 +440,16 @@ async def gemma_chat_mode_off(message: Message, state: FSMContext):
     await state.clear()
     await message.reply("👋 AI Chat Mode closed.")
 
-@dp.message(GemmaStates.chatting, F.text)
-async def chat_with_gemma_handler(message: Message):
-    user_data = await check_user_access(message)
-    if not user_data: return 
-
+async def _reply_with_gemma(message: Message, user_text: str):
+    """Спільна логіка для текстового і голосового режиму /gemma."""
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
     # Історія (user + assistant) зберігається всередині ask_gemma — тут не дублюємо
     response = await ask_gemma(
         telegram_id=message.from_user.id,
-        user_message=message.text,
-        ollama_url=OLLAMA_URL
+        user_message=user_text,
+        ollama_url=OLLAMA_URL,
+        session=http_session
     )
 
     # Відповідь моделі може містити символи < > &, які ламають HTML-розмітку Telegram.
@@ -384,10 +458,138 @@ async def chat_with_gemma_handler(message: Message):
     for chunk_start in range(0, len(safe_response), 4096):
         await message.reply(safe_response[chunk_start:chunk_start + 4096])
 
+@dp.message(GemmaStates.chatting, F.text)
+async def chat_with_gemma_handler(message: Message):
+    user_data = await check_user_access(message)
+    if not user_data: return
+
+    await _reply_with_gemma(message, message.text)
+
+@dp.message(GemmaStates.chatting, F.voice)
+async def voice_with_gemma_handler(message: Message):
+    user_data = await check_user_access(message)
+    if not user_data: return
+
+    if not user_data["can_use_gemma"]:
+        return await message.reply("⚠️ Администратор отключил вам доступ к ИИ-модели Gemma 2.")
+
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        await bot.download(message.voice, destination=tmp_path)
+        recognized_text = await asyncio.to_thread(transcribe_voice, tmp_path)
+    except Exception:
+        logger.exception("Failed to transcribe voice message")
+        return await message.reply("❌ Не удалось распознать голосовое сообщение.")
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+    if not recognized_text:
+        return await message.reply("🎤 Не удалось разобрать речь в сообщении. Попробуйте ещё раз.")
+
+    await message.reply(f"🎤 <i>Распознано:</i> {html.escape(recognized_text)}")
+    await _reply_with_gemma(message, recognized_text)
+
+@dp.message(Command("history"))
+async def command_history_handler(message: Message):
+    user_data = await check_user_access(message)
+    if not user_data: return
+
+    if not user_data["can_use_gemma"]:
+        return await message.reply("⚠️ Администратор отключил вам доступ к ИИ-модели Gemma 2.")
+
+    history = get_chat_history(message.from_user.id, limit=20)
+    if not history:
+        return await message.reply("🗂️ История диалога с ИИ пуста.")
+
+    lines = ["🗂️ <b>Последние сообщения диалога с ИИ</b>\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"]
+    for role, msg in history:
+        speaker = "🧑 Вы" if role == "user" else "🧠 Gemma"
+        text = msg if len(msg) <= 300 else msg[:300] + "…"
+        lines.append(f"<b>{speaker}:</b> {html.escape(text)}")
+    lines.append("\n<i>Чтобы очистить память — /forget</i>")
+
+    full_text = "\n\n".join(lines)
+    for chunk_start in range(0, len(full_text), 4096):
+        await message.reply(full_text[chunk_start:chunk_start + 4096])
+
+@dp.message(Command("forget"))
+async def command_forget_handler(message: Message):
+    user_data = await check_user_access(message)
+    if not user_data: return
+
+    if not user_data["can_use_gemma"]:
+        return await message.reply("⚠️ Администратор отключил вам доступ к ИИ-модели Gemma 2.")
+
+    clear_chat_history(message.from_user.id)
+    await message.reply("🧹 Память диалога с ИИ очищена. Gemma больше не помнит предыдущий контекст.")
+
+@dp.message(Command("tokens"))
+async def command_tokens_handler(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    per_user = get_token_usage_per_user()
+    total = get_total_token_usage()
+
+    if not per_user:
+        return await message.reply("📈 Данных по расходу токенов пока нет.")
+
+    report = "📈 <b>РАСХОД ТОКЕНОВ ПО ПОЛЬЗОВАТЕЛЯМ</b>\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
+    for row in per_user:
+        approx_mark = " <i>(есть оценочные значения)</i>" if row["has_estimated"] else ""
+        report += (
+            f"👤 <code>{html.escape(row['login'])}</code> | ID: <code>{row['telegram_id']}</code>\n"
+            f"└ Запросов: {row['requests']} | Prompt: {row['prompt_tokens']} | "
+            f"Completion: {row['completion_tokens']} | Всего: <b>{row['total_tokens']}</b>{approx_mark}\n\n"
+        )
+
+    report += (
+        f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        f"💯 <b>Всего по системе:</b> {total['requests']} запросов, "
+        f"{total['total_tokens']} токенов (prompt: {total['prompt_tokens']}, completion: {total['completion_tokens']})"
+    )
+    await message.reply(report)
+
+@dp.message(Command("auditlog"))
+async def command_auditlog_handler(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    entries = get_audit_log(limit=20)
+    if not entries:
+        return await message.reply("📜 Журнал действий админов пуст.")
+
+    action_labels = {
+        "approve": "✅ одобрил",
+        "reject": "❌ отклонил",
+        "ban": "🚫 забанил",
+        "unban": "🟢 разбанил",
+    }
+
+    report = "📜 <b>ЖУРНАЛ ДЕЙСТВИЙ АДМИНОВ</b>\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
+    for e in entries:
+        target = html.escape(e["target_login"]) if e["target_login"] else str(e["target_telegram_id"])
+        action_text = action_labels.get(e["action"], e["action"])
+        report += (
+            f"🕒 {e['created_at']}\n"
+            f"<b>{html.escape(e['admin_label'] or 'unknown')}</b> {action_text} пользователя "
+            f"<code>{target}</code>\n\n"
+        )
+
+    for chunk_start in range(0, len(report), 4096):
+        await message.reply(report[chunk_start:chunk_start + 4096])
+
 # --- ЗАПУСК ---
 async def main() -> None:
+    global http_session
     init_db()
-    
+
     procfs_path = os.getenv("PROCFS_PATH")
     if procfs_path:
         # Застосовуємо тільки якщо шлях реально існує — інакше psutil впаде на
@@ -402,10 +604,20 @@ async def main() -> None:
                 f"using the container's own /proc instead."
             )
 
+    # Базовое "/"-меню для незарегистрированных/неизвестных чатов
+    await bot.set_my_commands(
+        build_command_list(is_admin=False),
+        scope=BotCommandScopeDefault()
+    )
+    for admin_id in ADMIN_IDS:
+        await apply_user_commands(admin_id, is_admin=True)
+
+    http_session = aiohttp.ClientSession()
     logger.info("Starting secure bot polling...")
     try:
         await dp.start_polling(bot)
     finally:
+        await http_session.close()
         await bot.session.close()
 
 if __name__ == "__main__":

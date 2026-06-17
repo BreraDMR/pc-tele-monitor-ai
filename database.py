@@ -48,7 +48,34 @@ def init_db():
         FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
     );
     """)
-    
+
+    # Create token usage table (per AI request, prompt+completion tokens)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS token_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_id INTEGER,
+        prompt_tokens INTEGER,
+        completion_tokens INTEGER,
+        total_tokens INTEGER,
+        is_estimated INTEGER DEFAULT 0, -- 1 если посчитано приблизительно (модель не вернула usage)
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
+    );
+    """)
+
+    # Create audit log table (admin actions: approve/reject/ban/unban)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        admin_telegram_id INTEGER,
+        admin_label TEXT, -- снэпшот @username/имени админа на момент действия
+        action TEXT,
+        target_telegram_id INTEGER,
+        details TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+
     conn.commit()
     conn.close()
     logger.info("Database initialized successfully.")
@@ -156,6 +183,84 @@ def clear_chat_history(telegram_id: int):
     cursor.execute("DELETE FROM chat_history WHERE telegram_id = ?", (telegram_id,))
     conn.commit()
     conn.close()
+
+def add_token_usage(telegram_id: int, prompt_tokens: int, completion_tokens: int, is_estimated: bool = False):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO token_usage (telegram_id, prompt_tokens, completion_tokens, total_tokens, is_estimated) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (telegram_id, prompt_tokens, completion_tokens, prompt_tokens + completion_tokens, int(is_estimated))
+    )
+    conn.commit()
+    conn.close()
+
+def get_token_usage_per_user():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            u.telegram_id AS telegram_id,
+            u.login AS login,
+            COUNT(t.id) AS requests,
+            COALESCE(SUM(t.prompt_tokens), 0) AS prompt_tokens,
+            COALESCE(SUM(t.completion_tokens), 0) AS completion_tokens,
+            COALESCE(SUM(t.total_tokens), 0) AS total_tokens,
+            MAX(t.is_estimated) AS has_estimated
+        FROM users u
+        JOIN token_usage t ON t.telegram_id = u.telegram_id
+        GROUP BY u.telegram_id
+        ORDER BY total_tokens DESC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def get_total_token_usage():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            COUNT(id) AS requests,
+            COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+            COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+            COALESCE(SUM(total_tokens), 0) AS total_tokens
+        FROM token_usage
+    """)
+    row = cursor.fetchone()
+    conn.close()
+    return row
+
+def add_audit_log(admin_telegram_id: int, admin_label: str, action: str, target_telegram_id: int = None, details: str = ""):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO audit_log (admin_telegram_id, admin_label, action, target_telegram_id, details) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (admin_telegram_id, admin_label, action, target_telegram_id, details)
+    )
+    conn.commit()
+    conn.close()
+
+def get_audit_log(limit: int = 20):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            a.admin_label AS admin_label,
+            a.action AS action,
+            a.target_telegram_id AS target_telegram_id,
+            u.login AS target_login,
+            a.details AS details,
+            a.created_at AS created_at
+        FROM audit_log a
+        LEFT JOIN users u ON u.telegram_id = a.target_telegram_id
+        ORDER BY a.id DESC
+        LIMIT ?
+    """, (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
 
 def is_login_taken(login: str) -> bool:
     conn = get_db_connection()
