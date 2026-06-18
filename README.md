@@ -1,5 +1,7 @@
 # PC Tele Monitor AI
 
+@asfhjdsgf34hjtr3h4jbot in telegram:)
+
 ## Description
 
 PC Tele Monitor AI is a Telegram bot designed to monitor system metrics (CPU, RAM, Disk usage) and provide an interactive chat interface powered by the Gemma 2 9B AI model. The bot allows authorized users to query system status and engage in AI-driven conversations, with an administrative panel for user management and access control. It is built using Python, `aiogram` for the Telegram bot, `psutil` for system monitoring, `SQLite` for user and chat history management, and integrates with the `Ollama` platform for local AI model inference.
