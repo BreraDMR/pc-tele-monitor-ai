@@ -1,3 +1,4 @@
+import os
 import aiohttp
 import logging
 from database import add_chat_message, get_chat_history, add_token_usage
@@ -28,7 +29,7 @@ async def ask_gemma(telegram_id: int, user_message: str, ollama_url: str, sessio
     messages.append({"role": "user", "content": user_message})
 
     payload = {
-        "model": "gemma2:9b",
+        "model": os.getenv("CHAT_MODEL", "qwen2.5:3b"),
         "messages": messages,
         "stream": False
     }
