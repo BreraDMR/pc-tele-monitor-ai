@@ -15,6 +15,21 @@
 
 > My first home-lab project — the starting point for [homelab-wsl](https://github.com/BreraDMR/homelab-wsl).
 
+## Why this exists
+
+A headless under-desk PC has no screen to glance at, and SSH-ing in just to check
+if it's overloaded is friction. The problems this bot solves:
+
+- **No quick way to check a headless box's load.** A single `/status` message
+  returns live CPU / RAM / disk usage from anywhere, over a chat app you already
+  have open — no SSH, no monitoring stack to host.
+- **A status bot shouldn't be open to the world.** Access is **approval-gated**:
+  strangers can `/register`, but only the admin's one-tap approval lets them in,
+  and the admin can ban/unban — so the bot stays private without sharing a secret.
+- **Cloud LLM chat means a bill and data leaving the box.** The optional AI chat
+  runs a **local** model (Gemma 2 via Ollama) on the same machine — free, private,
+  and offline-capable — instead of calling a paid API.
+
 ## Overview
 
 PC Tele Monitor AI is a Telegram bot designed to monitor system metrics (CPU, RAM, Disk usage) and provide an interactive chat interface powered by the Gemma 2 9B AI model. The bot allows authorized users to query system status and engage in AI-driven conversations, with an administrative panel for user management and access control. It is built using Python, `aiogram` for the Telegram bot, `psutil` for system monitoring, `SQLite` for user and chat history management, and integrates with the `Ollama` platform for local AI model inference.
