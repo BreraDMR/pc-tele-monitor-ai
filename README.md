@@ -12,6 +12,10 @@
 [![License: PolyForm NC](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue?style=for-the-badge)](LICENSE)
 </div>
 
+https://github.com/user-attachments/assets/d25c4bb3-b4e2-4e13-91bc-f828b4c1a715
+
+<sub>A 21-second overview. The chat is the bot's own replies and buttons, recorded offline from its real handlers; the system numbers are real from the recording machine. The local-AI chat isn't shown. The file is also in <a href="docs/media/pc-tele-monitor-ai-overview.mp4"><code>docs/media/pc-tele-monitor-ai-overview.mp4</code></a>.</sub>
+
 > My first home-lab project — the starting point for [homelab-wsl](https://github.com/BreraDMR/homelab-wsl).
 
 ## Why this exists
